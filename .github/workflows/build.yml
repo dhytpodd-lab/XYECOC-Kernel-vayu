@@ -74,6 +74,51 @@ jobs:
           echo ""
           echo "Git modules:"
           cat .gitmodules || true
+            - name: Fix KernelSU Next path
+        run: |
+          cd kernel
+
+          echo "Checking KernelSU-Next..."
+          ls -la KernelSU-Next || true
+          ls -la KernelSU-Next/kernel || true
+
+          echo "Removing old drivers/kernelsu..."
+          rm -rf drivers/kernelsu
+
+          if [ -d KernelSU-Next/kernel ]; then
+            echo "Copying KernelSU-Next/kernel to drivers/kernelsu..."
+            cp -r KernelSU-Next/kernel drivers/kernelsu
+          else
+            echo "KernelSU-Next/kernel not found. Cloning manually..."
+            git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next KernelSU-Next-temp
+            cp -r KernelSU-Next-temp/kernel drivers/kernelsu
+          fi
+
+          echo "Checking drivers/kernelsu..."
+          ls -la drivers/kernelsu
+
+          if [ ! -f drivers/kernelsu/Kconfig ]; then
+            echo "ERROR: drivers/kernelsu/Kconfig not found!"
+            exit 1
+          fi
+
+          echo "drivers/kernelsu/Kconfig found OK"
+
+      - name: Make sure KSU is connected to kernel tree
+        run: |
+          cd kernel
+
+          echo "Checking drivers/Makefile..."
+          grep -n "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
+
+          echo "Checking drivers/Kconfig..."
+          grep -n 'drivers/kernelsu/Kconfig' drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
+
+          echo "KSU lines in drivers/Makefile:"
+          grep -n "kernelsu" drivers/Makefile || true
+
+          echo "KSU lines in drivers/Kconfig:"
+          grep -n "drivers/kernelsu/Kconfig" drivers/Kconfig || true    
 
       - name: Fix KernelSU Next path
         run: |
