@@ -1,0 +1,16 @@
+{
+  "name": "XYECOC Kernel KSUN Edition",
+  "device": "Poco X3 Pro",
+  "codenames": ["vayu", "bhima"],
+  "author": "@Danik_4el_2w",
+  "installer": "AnyKernel3",
+  "root_target": "KernelSU Next / KSUN",
+  "status": "template_not_flashable_until_kernel_image_is_added",
+  "required_kernel_image_names": ["Image.gz-dtb", "Image.gz", "Image"],
+  "included_lkm_reference": {
+    "filename": "android16-6.12_kernelsu.ko",
+    "auto_installed": false,
+    "vermagic": "6.12.76-4k-gae4e2f4f997e-dirty SMP preempt mod_unload modversions aarch64",
+    "sha256": "f6876b272c6d0219d45eea93871a6cc739af0d17d72758a15549fc97dee788d7"
+  }
+}

@@ -1,0 +1,13 @@
+XYECOC Kernel package structure
+
+Root:
+  anykernel.sh                         Main AnyKernel3 install script
+  META-INF/                            Recovery updater files
+  tools/                               AnyKernel3 tools
+  README_RU.md                         Russian guide
+  PROMPT_BUILD_KERNEL_RU.md            Prompt for building real kernel
+  CHANGELOG.md                         Changelog
+  extras/ksun_lkm_reference/           Reference .ko only, not installed
+
+To make flashable:
+  Add compiled Image.gz-dtb / Image.gz / Image to the ZIP root.
