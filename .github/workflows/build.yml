@@ -1,0 +1,122 @@
+name: Build XYECOC Kernel for Poco X3 Pro
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout XYECOC repo
+        uses: actions/checkout@v4
+
+      - name: Install packages
+        run: |
+          sudo apt update
+          sudo apt install -y \
+            git curl wget unzip zip bc bison flex make build-essential \
+            python3 python-is-python3 libssl-dev libelf-dev \
+            gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
+            clang lld llvm ccache rsync lz4
+
+      - name: Clone kernel source
+        run: |
+          git clone --depth=1 -b 16-ksun https://github.com/AnymoreProject/android_kernel_vayu kernel
+
+      - name: Show kernel info
+        run: |
+          cd kernel
+          echo "Available vayu configs:"
+          find arch/arm64/configs -type f | grep -Ei "vayu|sm8150|xiaomi" || true
+          echo "Check KernelSU files:"
+          find . -maxdepth 4 -type d | grep -Ei "kernelsu|ksu" || true
+
+      - name: Configure kernel
+        run: |
+          cd kernel
+
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export O=out
+
+          make O=out ARCH=arm64 vendor/sm8150-perf_defconfig
+
+          echo "Applying Xiaomi vayu config if available..."
+          if [ -f arch/arm64/configs/vendor/xiaomi/sm8150-common.config ]; then
+            cat arch/arm64/configs/vendor/xiaomi/sm8150-common.config >> out/.config
+          fi
+
+          if [ -f arch/arm64/configs/vendor/xiaomi/vayu.config ]; then
+            cat arch/arm64/configs/vendor/xiaomi/vayu.config >> out/.config
+          fi
+
+          echo "Force enable KSUN/KSU configs..."
+          echo "CONFIG_KSU=y" >> out/.config
+          echo "CONFIG_KPROBES=y" >> out/.config
+          echo "CONFIG_KPROBE_EVENTS=y" >> out/.config
+
+          make O=out ARCH=arm64 olddefconfig
+
+      - name: Build kernel
+        run: |
+          cd kernel
+
+          export ARCH=arm64
+          export SUBARCH=arm64
+          export O=out
+
+          make -j$(nproc) O=out ARCH=arm64 \
+            CC=clang \
+            LD=ld.lld \
+            AR=llvm-ar \
+            NM=llvm-nm \
+            OBJCOPY=llvm-objcopy \
+            OBJDUMP=llvm-objdump \
+            STRIP=llvm-strip \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            Image.gz-dtb || \
+          make -j$(nproc) O=out ARCH=arm64 \
+            CC=clang \
+            LD=ld.lld \
+            CLANG_TRIPLE=aarch64-linux-gnu- \
+            CROSS_COMPILE=aarch64-linux-gnu- \
+            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
+            Image.gz
+
+      - name: Prepare AnyKernel3
+        run: |
+          mkdir -p output
+
+          if [ -f kernel/out/arch/arm64/boot/Image.gz-dtb ]; then
+            cp kernel/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image.gz-dtb
+            echo "Using Image.gz-dtb"
+          elif [ -f kernel/out/arch/arm64/boot/Image.gz ]; then
+            cp kernel/out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
+            echo "Using Image.gz"
+          else
+            echo "No kernel image found!"
+            find kernel/out/arch/arm64/boot -type f || true
+            exit 1
+          fi
+
+          cd AnyKernel3
+
+          sed -i 's/kernel.string=.*/kernel.string=XYECOC Kernel KSUN Edition by @Danik_4el_2w/' anykernel.sh || true
+          sed -i 's/do.devicecheck=.*/do.devicecheck=1/' anykernel.sh || true
+          sed -i 's/device.name1=.*/device.name1=vayu/' anykernel.sh || true
+          sed -i 's/device.name2=.*/device.name2=bhima/' anykernel.sh || true
+          sed -i 's/device.name3=.*/device.name3=POCO X3 Pro/' anykernel.sh || true
+
+          zip -r9 ../output/XYECOC_Kernel_KSUN_PocoX3Pro_TEST.zip . \
+            -x "*.git*" \
+            -x "README.md" \
+            -x "*.zip"
+
+      - name: Upload flashable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: XYECOC_Kernel_KSUN_PocoX3Pro
+          path: output/XYECOC_Kernel_KSUN_PocoX3Pro_TEST.zip
