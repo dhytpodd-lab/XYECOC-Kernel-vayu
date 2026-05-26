@@ -1,1 +1,0 @@
-f6876b272c6d0219d45eea93871a6cc739af0d17d72758a15549fc97dee788d7  /mnt/data/android16-6.12_kernelsu.ko
