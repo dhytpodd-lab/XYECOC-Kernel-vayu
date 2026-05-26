@@ -25,7 +25,7 @@ jobs:
             git curl wget unzip zip bc bison flex make build-essential \
             python3 python-is-python3 libssl-dev libelf-dev \
             gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi \
-            clang lld llvm ccache rsync lz4 xz-utils
+            clang lld llvm ccache rsync lz4 xz-utils device-tree-compiler
 
       - name: Check AnyKernel3 folder
         run: |
@@ -34,7 +34,10 @@ jobs:
 
           if [ ! -d AnyKernel3 ]; then
             echo "ERROR: AnyKernel3 folder not found!"
-            echo "Upload unpacked AnyKernel3 folder to repo root."
+            echo "Upload unpacked AnyKernel3 folder to repo root:"
+            echo "AnyKernel3/anykernel.sh"
+            echo "AnyKernel3/META-INF/"
+            echo "AnyKernel3/tools/"
             exit 1
           fi
 
@@ -49,7 +52,8 @@ jobs:
         run: |
           git clone --depth=1 -b "${KERNEL_BRANCH}" "${KERNEL_REPO}" kernel
           cd kernel
-          echo "Initializing submodules..."
+
+          echo "Init submodules..."
           git submodule update --init --recursive --depth=1 || true
 
       - name: Show kernel info
@@ -65,7 +69,7 @@ jobs:
 
           echo ""
           echo "KernelSU / KSUN folders:"
-          find . -maxdepth 4 -type d | grep -Ei "kernelsu|ksu|KernelSU" || true
+          find . -maxdepth 5 -type d | grep -Ei "kernelsu|ksu|KernelSU" || true
 
           echo ""
           echo "Git modules:"
@@ -80,48 +84,94 @@ jobs:
 
           echo "Trying KernelSU-Next submodule..."
           if [ -d KernelSU-Next/kernel ]; then
-            echo "Copying KernelSU-Next/kernel to drivers/kernelsu"
-            cp -r KernelSU-Next/kernel drivers/kernelsu
+            cp -a KernelSU-Next/kernel drivers/kernelsu
           elif [ -d kernelsu/kernel ]; then
-            echo "Copying kernelsu/kernel to drivers/kernelsu"
-            cp -r kernelsu/kernel drivers/kernelsu
+            cp -a kernelsu/kernel drivers/kernelsu
           elif [ -d KernelSU/kernel ]; then
-            echo "Copying KernelSU/kernel to drivers/kernelsu"
-            cp -r KernelSU/kernel drivers/kernelsu
+            cp -a KernelSU/kernel drivers/kernelsu
           else
             echo "KernelSU-Next/kernel not found. Cloning manually..."
             git clone --depth=1 https://github.com/KernelSU-Next/KernelSU-Next KernelSU-Next-temp
-            cp -r KernelSU-Next-temp/kernel drivers/kernelsu
+            cp -a KernelSU-Next-temp/kernel drivers/kernelsu
           fi
 
           echo "Checking drivers/kernelsu..."
           ls -la drivers/kernelsu
 
           if [ ! -f drivers/kernelsu/Kconfig ]; then
-            echo "ERROR: drivers/kernelsu/Kconfig still not found!"
+            echo "ERROR: drivers/kernelsu/Kconfig not found!"
             exit 1
           fi
 
-          echo "drivers/kernelsu/Kconfig found OK"
+          echo "KernelSU Next path fixed OK"
+
+      - name: Patch KernelSU version tag fallback
+        run: |
+          cd kernel
+
+          echo "Patching KSU_VERSION / KSU_VERSION_TAG fallback..."
+          python3 - <<'PY'
+          from pathlib import Path
+
+          candidates = [
+              Path("drivers/kernelsu/ksu.h"),
+              Path("drivers/kernelsu/include/ksu.h"),
+          ]
+
+          patched_any = False
+
+          fallback = '#ifndef KSU_VERSION\n#define KSU_VERSION 11999\n#endif\n#ifndef KSU_VERSION_TAG\n#define KSU_VERSION_TAG "XYECOC-KSUN"\n#endif\n\n'
+
+          for path in candidates:
+              if not path.exists():
+                  continue
+
+              text = path.read_text()
+              original = text
+
+              if 'KSU_VERSION_TAG "XYECOC-KSUN"' not in text:
+                  if '#include <linux/types.h>' in text:
+                      text = text.replace('#include <linux/types.h>', fallback + '#include <linux/types.h>', 1)
+                  else:
+                      lines = text.splitlines(True)
+                      insert_at = 0
+                      for i, line in enumerate(lines[:20]):
+                          if line.startswith('#define '):
+                              insert_at = i + 1
+                      lines.insert(insert_at, fallback)
+                      text = ''.join(lines)
+
+              if text != original:
+                  path.write_text(text)
+                  print(f"Patched: {path}")
+                  patched_any = True
+              else:
+                  print(f"Already patched or no change needed: {path}")
+
+          if not patched_any:
+              print("No ksu.h was patched. Existing files:")
+              for p in Path("drivers/kernelsu").rglob("ksu.h"):
+                  print(p)
+          PY
+
+          echo ""
+          echo "Showing patched KSU headers:"
+          find drivers/kernelsu -name "ksu.h" -print -exec sed -n '1,25p' {} \;
 
       - name: Make sure KSU is connected to kernel tree
         run: |
           cd kernel
 
           echo "Checking drivers/Makefile..."
-          if ! grep -q "kernelsu" drivers/Makefile; then
-            echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
-          fi
+          grep -n "kernelsu" drivers/Makefile || echo 'obj-$(CONFIG_KSU) += kernelsu/' >> drivers/Makefile
 
           echo "Checking drivers/Kconfig..."
-          if ! grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig; then
-            sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
-          fi
+          grep -n 'drivers/kernelsu/Kconfig' drivers/Kconfig || sed -i '/endmenu/i source "drivers/kernelsu/Kconfig"' drivers/Kconfig
 
-          echo "KSU lines in drivers/Makefile:"
+          echo "drivers/Makefile KSU lines:"
           grep -n "kernelsu" drivers/Makefile || true
 
-          echo "KSU lines in drivers/Kconfig:"
+          echo "drivers/Kconfig KSU lines:"
           grep -n "drivers/kernelsu/Kconfig" drivers/Kconfig || true
 
       - name: Configure kernel
@@ -133,20 +183,21 @@ jobs:
           export O=out
 
           echo "Selecting defconfig..."
+
           DEFCONFIG=""
 
-          if [ -f arch/arm64/configs/vendor/sm8150_defconfig ]; then
+          if [ -f arch/arm64/configs/vayu_defconfig ]; then
+            DEFCONFIG="vayu_defconfig"
+          elif [ -f arch/arm64/configs/vendor/vayu_defconfig ]; then
+            DEFCONFIG="vendor/vayu_defconfig"
+          elif [ -f arch/arm64/configs/vendor/sm8150_defconfig ]; then
             DEFCONFIG="vendor/sm8150_defconfig"
           elif [ -f arch/arm64/configs/vendor/sm8150-perf_defconfig ]; then
             DEFCONFIG="vendor/sm8150-perf_defconfig"
-          elif [ -f arch/arm64/configs/vendor/vayu_defconfig ]; then
-            DEFCONFIG="vendor/vayu_defconfig"
-          elif [ -f arch/arm64/configs/vayu_defconfig ]; then
-            DEFCONFIG="vayu_defconfig"
           else
             echo "ERROR: No suitable defconfig found!"
             echo "Available defconfigs:"
-            find arch/arm64/configs -type f | sed 's#arch/arm64/configs/##' | sort | head -250
+            find arch/arm64/configs -type f | sed 's#arch/arm64/configs/##' | sort | head -300
             exit 1
           fi
 
@@ -154,6 +205,7 @@ jobs:
           make O=out ARCH=arm64 "${DEFCONFIG}"
 
           echo "Applying Xiaomi config fragments if available..."
+
           if [ -f arch/arm64/configs/vendor/xiaomi/sm8150-common.config ]; then
             echo "Adding sm8150-common.config"
             cat arch/arm64/configs/vendor/xiaomi/sm8150-common.config >> out/.config
@@ -170,7 +222,11 @@ jobs:
           fi
 
           echo "Force enabling KSUN / KernelSU configs..."
-          ./scripts/config --file out/.config -e KSU -e KPROBES -e KPROBE_EVENTS || true
+
+          ./scripts/config --file out/.config \
+            -e KSU \
+            -e KPROBES \
+            -e KPROBE_EVENTS || true
 
           echo "CONFIG_KSU=y" >> out/.config
           echo "CONFIG_KPROBES=y" >> out/.config
@@ -193,30 +249,25 @@ jobs:
           echo "Author: @Danik_4el_2w"
           echo "Device: Poco X3 Pro / vayu / bhima"
 
-          make -j$(nproc) O=out ARCH=arm64 \
-            CC=clang \
+          make -j2 O=out ARCH=arm64 SUBARCH=arm64 \
+            DTC_EXT=dtc \
+            CC="ccache clang" \
+            HOSTCC=clang \
+            HOSTCXX=clang++ \
             LD=ld.lld \
             AR=llvm-ar \
             NM=llvm-nm \
+            STRIP=llvm-strip \
             OBJCOPY=llvm-objcopy \
             OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
+            READELF=llvm-readelf \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            Image.gz-dtb || \
-          make -j$(nproc) O=out ARCH=arm64 \
-            CC=clang \
-            LD=ld.lld \
-            AR=llvm-ar \
-            NM=llvm-nm \
-            OBJCOPY=llvm-objcopy \
-            OBJDUMP=llvm-objdump \
-            STRIP=llvm-strip \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            Image.gz
+            CROSS_COMPILE_COMPAT=arm-linux-gnueabi- \
+            LLVM=1 \
+            LLVM_IAS=1 \
+            Image dtbo.img dtb.img 2>&1 | tee ../build.log
 
       - name: Check built kernel image
         run: |
@@ -225,17 +276,31 @@ jobs:
           echo "Boot output files:"
           find out/arch/arm64/boot -maxdepth 3 -type f -print || true
 
-          if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
-            echo "KERNEL_IMAGE=Image.gz-dtb" >> "$GITHUB_ENV"
+          if [ -f out/arch/arm64/boot/Image ]; then
+            echo "KERNEL_IMAGE=Image" >> $GITHUB_ENV
+            echo "Kernel image found: Image"
+            ls -lh out/arch/arm64/boot/Image
+          elif [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
+            echo "KERNEL_IMAGE=Image.gz-dtb" >> $GITHUB_ENV
             echo "Kernel image found: Image.gz-dtb"
             ls -lh out/arch/arm64/boot/Image.gz-dtb
           elif [ -f out/arch/arm64/boot/Image.gz ]; then
-            echo "KERNEL_IMAGE=Image.gz" >> "$GITHUB_ENV"
+            echo "KERNEL_IMAGE=Image.gz" >> $GITHUB_ENV
             echo "Kernel image found: Image.gz"
             ls -lh out/arch/arm64/boot/Image.gz
           else
-            echo "ERROR: No Image.gz-dtb or Image.gz found!"
+            echo "ERROR: No kernel image found!"
             exit 1
+          fi
+
+          if [ -f out/arch/arm64/boot/dtbo.img ]; then
+            echo "DTBO_IMAGE=dtbo.img" >> $GITHUB_ENV
+            ls -lh out/arch/arm64/boot/dtbo.img
+          fi
+
+          if [ -f out/arch/arm64/boot/dtb.img ]; then
+            echo "DTB_IMAGE=dtb.img" >> $GITHUB_ENV
+            ls -lh out/arch/arm64/boot/dtb.img
           fi
 
       - name: Prepare AnyKernel3
@@ -243,7 +308,10 @@ jobs:
           mkdir -p output
 
           echo "Copying kernel image to AnyKernel3..."
-          if [ "${KERNEL_IMAGE}" = "Image.gz-dtb" ]; then
+
+          if [ "${KERNEL_IMAGE}" = "Image" ]; then
+            cp kernel/out/arch/arm64/boot/Image AnyKernel3/Image
+          elif [ "${KERNEL_IMAGE}" = "Image.gz-dtb" ]; then
             cp kernel/out/arch/arm64/boot/Image.gz-dtb AnyKernel3/Image.gz-dtb
           elif [ "${KERNEL_IMAGE}" = "Image.gz" ]; then
             cp kernel/out/arch/arm64/boot/Image.gz AnyKernel3/Image.gz
@@ -252,9 +320,18 @@ jobs:
             exit 1
           fi
 
+          if [ -f kernel/out/arch/arm64/boot/dtbo.img ]; then
+            cp kernel/out/arch/arm64/boot/dtbo.img AnyKernel3/dtbo.img
+          fi
+
+          if [ -f kernel/out/arch/arm64/boot/dtb.img ]; then
+            cp kernel/out/arch/arm64/boot/dtb.img AnyKernel3/dtb.img
+          fi
+
           cd AnyKernel3
 
           echo "Patching anykernel.sh branding..."
+
           sed -i 's/^kernel.string=.*/kernel.string=XYECOC Kernel KSUN Edition by @Danik_4el_2w/' anykernel.sh || true
           sed -i 's/^do.devicecheck=.*/do.devicecheck=1/' anykernel.sh || true
           sed -i 's/^device.name1=.*/device.name1=vayu/' anykernel.sh || true
@@ -262,10 +339,17 @@ jobs:
           sed -i 's/^device.name3=.*/device.name3=POCO X3 Pro/' anykernel.sh || true
           sed -i 's/^device.name4=.*/device.name4=Poco X3 Pro/' anykernel.sh || true
 
-          echo "anykernel.sh check:"
+          echo ""
+          echo "anykernel.sh header:"
           grep -Ei "kernel.string|device.name|do.devicecheck" anykernel.sh || true
 
+          echo ""
+          echo "Files going into ZIP:"
+          ls -la
+
+          echo ""
           echo "Creating flashable ZIP..."
+
           zip -r9 "../output/${ZIP_NAME}" . \
             -x "*.git*" \
             -x "README.md" \
@@ -273,6 +357,7 @@ jobs:
             -x ".github/*"
 
           cd ..
+
           echo "Output ZIP:"
           ls -lh "output/${ZIP_NAME}"
 
@@ -282,7 +367,7 @@ jobs:
           name: XYECOC_Kernel_KSUN_PocoX3Pro
           path: output/XYECOC_Kernel_KSUN_PocoX3Pro_TEST.zip
 
-      - name: Upload kernel config
+      - name: Upload kernel config and build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -290,3 +375,5 @@ jobs:
           path: |
             kernel/out/.config
             kernel/out/include/generated/compile.h
+            kernel/build.log
+            build.log
